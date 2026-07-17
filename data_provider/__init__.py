@@ -27,6 +27,15 @@
 6. YfinanceFetcher (Priority 4) - 来自 yfinance 库
 7. LongbridgeFetcher (Priority 5) - 长桥 OpenAPI（美股/港股兜底）
 
+【离线仓库：TdxChronosFetcher】
+- 当 TDX_CHRONOS_DATA_DIR 指向可用的 parquet 数据目录（默认自动探测
+  /app/tdx-chronos/data 等候选路径），tdx-chronos 可正常导入时，
+  TdxChronosFetcher 以 priority=0（可由 TDX_CHRONOS_PRIORITY 调整）
+  参与排序，作为 A 股 stock + ETF 的第一优先级离线来源；
+  任意失败均让该 fetcher 自动降级。
+- 仅支持 cn 日线；非 A 股 stock / ETF 段（可转债、REITs 非 ETF 段、指数、
+  HK / US / JP / KR / TW 等）由其他源继续提供。
+
 提示：优先级数字越小越优先，同优先级按初始化顺序排列
 """
 
@@ -41,6 +50,7 @@ from .yfinance_fetcher import YfinanceFetcher
 from .longbridge_fetcher import LongbridgeFetcher
 from .finnhub_fetcher import FinnhubFetcher
 from .alphavantage_fetcher import AlphaVantageFetcher
+from .tdx_chronos_fetcher import TdxChronosFetcher
 from .us_index_mapping import is_us_index_code, is_us_stock_code, get_us_index_yf_symbol, US_INDEX_MAPPING
 
 __all__ = [
@@ -56,6 +66,7 @@ __all__ = [
     'LongbridgeFetcher',
     'FinnhubFetcher',
     'AlphaVantageFetcher',
+    'TdxChronosFetcher',
     'is_us_index_code',
     'is_us_stock_code',
     'is_hk_stock_code',

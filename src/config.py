@@ -732,6 +732,12 @@ class Config:
     longbridge_oauth_client_id: Optional[str] = None
     stock_index_remote_update_enabled: bool = True
 
+    # === tdx-chronos 离线数据仓库（A 股 stock + ETF 优先源）===
+    # 留空时按内置候选路径自动探测（/app/tdx-chronos/data 等）；
+    # 只有当 tdx_chronos 可导入且 data_dir 包含完整 parquet + meta.db 时才启用。
+    tdx_chronos_data_dir: Optional[str] = None
+    tdx_chronos_priority: int = 0
+
     # === AlphaSift optional stock screening integration ===
     alphasift_enabled: bool = False
     alphasift_install_spec: str = DEFAULT_ALPHASIFT_INSTALL_SPEC
@@ -1636,6 +1642,8 @@ class Config:
                 os.getenv('STOCK_INDEX_REMOTE_UPDATE_ENABLED'),
                 default=True,
             ),
+            tdx_chronos_data_dir=os.getenv('TDX_CHRONOS_DATA_DIR') or None,
+            tdx_chronos_priority=parse_env_int(os.getenv('TDX_CHRONOS_PRIORITY'), 0, field_name='TDX_CHRONOS_PRIORITY', minimum=0),
             generation_backend=generation_backend,
             generation_fallback_backend=generation_fallback_backend,
             generation_backend_timeout_seconds=generation_backend_timeout_seconds,

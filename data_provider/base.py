@@ -624,6 +624,7 @@ class DataFetcherManager:
         "LongbridgeFetcher": {"hk", "us"},
         "FinnhubFetcher": {"us"},
         "AlphaVantageFetcher": {"us"},
+        "TdxChronosFetcher": {"cn"},
     }
     _daily_source_health = CircuitBreaker(failure_threshold=3, cooldown_seconds=300.0)
     _CONCEPT_RANKINGS_CACHE_TTL_SECONDS = 300.0
@@ -1144,8 +1145,11 @@ class DataFetcherManager:
         - 如果配置了 TUSHARE_TOKEN：实例化 TushareFetcher，并按其内部逻辑提升优先级
         - 如果配置了 Longbridge OAuth 或 Legacy 凭据：实例化 LongbridgeFetcher 作为美股/港股兜底
         - 未配置的可选数据源不实例化，避免在批量拉取时反复探测无效源
+        - TdxChronosFetcher（offline parquet）若 data_dir 可用且 tdx_chronos 可导入
+          则以配置项 tdx_chronos_priority（默认 0）参与排序，作为 A 股 stock / ETF
+          的第一优先级离线源；任何导入 / 初始化失败均让 fetcher 自动降级。
         - 默认优先级：
-          0. EfinanceFetcher (Priority 0) - 最高优先级
+          0. TdxChronosFetcher / EfinanceFetcher - 最高优先级（按可用性二选一）
           1. AkshareFetcher (Priority 1)
           2. PytdxFetcher (Priority 2) - 通达信
           3. BaostockFetcher (Priority 3)
@@ -1161,6 +1165,7 @@ class DataFetcherManager:
         from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
         from .longbridge_fetcher import LongbridgeFetcher
+        from .tdx_chronos_fetcher import TdxChronosFetcher
         config = get_config()
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
         efinance = EfinanceFetcher()
@@ -1210,20 +1215,53 @@ class DataFetcherManager:
         else:
             logger.debug("[数据源初始化] 跳过未配置的 AlphaVantageFetcher")
 
+        tdx_chronos_fetcher: Optional[BaseFetcher] = None
+        # TdxChronosFetcher 内部会直接从 env / 内置候选路径探测 TDX_CHRONOS_DATA_DIR，
+        # 这里的 config 仅作为运维覆盖透传。
+        try:
+            tdx_chronos_fetcher = TdxChronosFetcher(
+                data_dir=getattr(config, "tdx_chronos_data_dir", None),
+                priority=getattr(config, "tdx_chronos_priority", 0),
+            )
+            if not tdx_chronos_fetcher.is_available():
+                logger.debug(
+                    "[数据源初始化] tdx-chronos 数据目录不可用，跳过 TdxChronosFetcher"
+                )
+                tdx_chronos_fetcher = None
+            else:
+                logger.info(
+                    "[数据源初始化] TdxChronosFetcher 已启用: data_dir=%s, priority=%s",
+                    tdx_chronos_fetcher.resolved_data_dir,
+                    tdx_chronos_fetcher.priority,
+                )
+        except Exception as exc:
+            logger.debug(
+                "[数据源初始化] TdxChronosFetcher 实例化失败，跳过: %s", exc
+            )
+            tdx_chronos_fetcher = None
+
         # 初始化数据源列表
         self._ensure_concurrency_guards()
         with self._fetchers_lock:
-            self._fetchers = [
+            base_fetchers: List[BaseFetcher] = [
                 efinance,
                 tencent,
                 akshare,
                 pytdx,
                 baostock,
                 yfinance,
+            ]
+            if tdx_chronos_fetcher is not None:
+                # 把 TdxChronosFetcher 排在最前，由下面的 sort 按 priority 决定最终顺序；
+                # 通常它的 priority=0 会成为最高优先级来源。
+                base_fetchers.insert(0, tdx_chronos_fetcher)
+            self._fetchers = [
+                *base_fetchers,
                 *optional_fetchers,
             ]
 
-            # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
+            # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0；
+            # TdxChronosFetcher 如果 data_dir 可用，priority 由配置决定）
             self._fetchers.sort(key=lambda f: f.priority)
             self._refresh_fetcher_indexes_locked()
 

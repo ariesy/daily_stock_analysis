@@ -26,6 +26,13 @@ class _StubFetcher:
     def __init__(self, name: str, priority: int):
         self.name = name
         self.priority = priority
+        # Attributes that real fetchers expose and that the manager init
+        # references when logging probe results.
+        self.resolved_data_dir = None
+        self.data_dir = None
+
+    def is_available(self) -> bool:  # used by TdxChronosFetcher path
+        return True
 
 
 class _EmptyRawFetcher(BaseFetcher):
@@ -137,13 +144,22 @@ class TestFetcherSourceOptimization(unittest.TestCase):
         ) as mock_tushare, patch(
             "data_provider.longbridge_fetcher.LongbridgeFetcher",
             return_value=_StubFetcher("LongbridgeFetcher", 5),
-        ) as mock_longbridge:
+        ) as mock_longbridge, patch(
+            "data_provider.tdx_chronos_fetcher.TdxChronosFetcher",
+            return_value=_StubFetcher("TdxChronosFetcher", 0),
+        ) as mock_tdx:
             mock_longbridge.has_configured_credentials.return_value = False
             manager = DataFetcherManager()
 
+        # TdxChronosFetcher 已被 patch 为 _StubFetcher，必须在初始化时被实例化一次
+        # （_init_default_fetchers 始终尝试加入，data_dir 可用性由 stub.is_available 决定）。
+        mock_tdx.assert_called_once()
+        # TdxChronosFetcher 加入后以 priority=0 排在最前（同 priority 0 时
+        # 稳定排序保持其作为 base_fetchers[0] 的插入顺序）。
         self.assertEqual(
             manager.available_fetchers,
             [
+                "TdxChronosFetcher",
                 "EfinanceFetcher",
                 "TencentFetcher",
                 "AkshareFetcher",

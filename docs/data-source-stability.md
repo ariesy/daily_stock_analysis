@@ -10,6 +10,7 @@
 
 - A 股个股与 AlphaSift：优先配置 `TUSHARE_TOKEN`，并保留 AkShare / Efinance / Tencent / Baostock / YFinance 兜底。
 - A 股大盘复盘：配置 `TICKFLOW_API_KEY` 后，指数和市场宽度会优先尝试 TickFlow，失败后回退现有免费源。
+- A 股日线离线优先：若本地有可用的 tdx-chronos Parquet 数据仓库（`TDX_CHRONOS_DATA_DIR` 或默认 `/app/tdx-chronos/data`），TdxChronosFetcher 以 priority=0 作为 A 股 stock + ETF 的第一优先级离线来源；任何导入或初始化失败都会让该 fetcher 自动降级，不会破坏其他数据源。
 - 港股 / 美股：配置 `LONGBRIDGE_*` 后优先使用 Longbridge，YFinance、Finnhub、AlphaVantage 继续兜底。
 - 热点题材：AlphaSift 热点默认走 DSA EastMoney provider，并使用本地 last-good cache 降低实时接口失败影响。
 
@@ -17,7 +18,8 @@
 
 | 场景 | 已接入源 | 默认使用方式 | 失败处理 |
 | --- | --- | --- | --- |
-| A 股日线 / 技术面 | Efinance、Tencent、AkShare、Tushare、Pytdx、Baostock、YFinance | `DataFetcherManager` 按优先级尝试；配置 `TUSHARE_TOKEN` 后 Tushare 自动进入候选源 | 单源失败后尝试下一个源；连续失败会短期熔断该源 |
+| A 股 stock + ETF 日线（离线优先） | **TdxChronosFetcher**（tdx-chronos Parquet，本地离线）、Efinance、Tencent、AkShare、Tushare、Pytdx、Baostock、YFinance | `DataFetcherManager` 按优先级尝试；若 `TDX_CHRONOS_DATA_DIR` 指向可用的 Parquet 仓库，TdxChronosFetcher 以 priority=0 排在最前 | TdxChronosFetcher 仅覆盖 A 股 stock + ETF，其他代码（可转债 / REITs 非 ETF 段 / 指数 / HK / US / JP / KR / TW）由后续优先级链提供；任何导入 / 初始化失败均让 fetcher 自动降级 |
+| A 股日线 / 技术面（其他子集） | Efinance、Tencent、AkShare、Tushare、Pytdx、Baostock、YFinance | `DataFetcherManager` 按优先级尝试；配置 `TUSHARE_TOKEN` 后 Tushare 自动进入候选源 | 单源失败后尝试下一个源；连续失败会短期熔断该源 |
 | A 股实时行情 | Tencent、AkShare Sina、Efinance、AkShare EM、Tushare | `REALTIME_SOURCE_PRIORITY` 控制顺序，默认偏向 Tencent / Sina 这类轻量源 | 失败源记录 `fallback_from`，成功源继续返回 |
 | A 股大盘复盘 | TickFlow、AkShare、Tushare、Efinance | 配置 `TICKFLOW_API_KEY` 后，主指数和市场宽度优先尝试 TickFlow | TickFlow 权限不足或失败时回退 AkShare / Tushare / Efinance 链路 |
 | AlphaSift 选股快照 | Tushare、Sina、Efinance、AkShare EM、EastMoney Datacenter | 有 `TUSHARE_TOKEN` 时自动把 `tushare` 放入快照优先级；否则使用免费源链路 | AlphaSift 维护 source health；DSA 状态接口透出 snapshot/daily health |
@@ -39,7 +41,8 @@ flowchart TD
     D --> C[本地 stock_daily 缓存]
     C -->|命中且新鲜| COK[复用缓存]
     C -->|缺失或过期| DM{市场}
-    DM -->|A 股| CN[Tushare if token -> Efinance/Tencent -> AkShare -> Pytdx -> Baostock -> YFinance]
+    DM -->|A 股 stock / ETF| CN_OFFLINE[TdxChronos if TDX_CHRONOS_DATA_DIR 可用 -> Tushare if token -> Efinance/Tencent -> AkShare -> Pytdx -> Baostock -> YFinance]
+    DM -->|A 股其他子集| CN[Tushare if token -> Efinance/Tencent -> AkShare -> Pytdx -> Baostock -> YFinance]
     DM -->|港股| HK[Longbridge if configured -> AkShare/Tushare -> YFinance]
     DM -->|美股| US[Longbridge/YFinance -> Finnhub/AlphaVantage -> Stooq]
 
@@ -67,6 +70,28 @@ flowchart TD
     TFM --> QL
     MF --> QL
 ```
+
+## tdx-chronos 离线仓库接入
+
+`TdxChronosFetcher` 把外部 [tdx-chronos](https://github.com/ariesy/tdx-chronos) 仓库作为 A 股 stock + ETF 的离线 Parquet 数据源接入 `DataFetcherManager`。当本地数据目录可用时，它以 `priority=0` 参与排序，领先于所有在线源；任何导入或目录缺失都会让该 fetcher 自动降级，不影响现有 fallback 链路。
+
+**启用条件**
+
+1. 安装 tdx-chronos（`pip install -e /path/to/tdx-chronos`，需要 Python ≥ 3.12 与 pyarrow / pandas）。
+2. 通过 `cron/daily_sync.sh` 等让 tdx-chronos 同步本地数据目录（需包含 `parquet_compact/` + `meta/meta.db`）。
+3. 配置 `TDX_CHRONOS_DATA_DIR`（默认按内置候选路径自动探测 `/app/tdx-chronos/data` → `./tdx-chronos/data`）。
+
+**范围**
+
+- ✅ A 股 stock（沪深主板 / 创业板 / 科创板 / 北交所）+ 场内 ETF / LOF / REITs
+- ❌ 可转债（`sh11`/`sz12`）、REITs 非 ETF 段、深证指数 (`sz399xxx`)：主动抛 `DataFetchError` 由 manager 走其他源
+- ❌ HK / US / JP / KR / TW：同上
+
+**注意事项**
+
+- 离线源，没有限流 / IP 封禁问题，但也不会实时更新；适合作为日线分析主力 + 在线源兜底实时行情。
+- 与 TickFlow / Tushare / Longbridge 的关系是正交：tickflow / token 数据源仍按原有 `TICKFLOW_API_KEY` / `TUSHARE_TOKEN` / `LONGBRIDGE_*` 配置参与排序。
+- 升级 tdx-chronos 时如果 parquet schema 变更，先停止服务再升级；并发读旧 parquet 可能出现 `pyarrow` 解码错误。
 
 ## 失败与降级图
 
