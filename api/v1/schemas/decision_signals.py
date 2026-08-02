@@ -186,6 +186,36 @@ class DecisionSignalOutcomeStatsBucket(BaseModel):
     unable_reasons: Dict[str, int] = Field(default_factory=dict)
 
 
+class DecisionSignalProfileCalibrationBucket(BaseModel):
+    dimensions: Dict[str, str] = Field(default_factory=dict)
+    total: int
+    completed: int
+    unable: int
+    hit: int
+    miss: int
+    neutral: int
+    sample_sufficient: bool
+    hit_rate_pct: Optional[float] = None
+    avg_stock_return_pct: Optional[float] = None
+    miss_rate_pct: Optional[float] = None
+    unable_rate_pct: Optional[float] = None
+    max_adverse_excursion_pct: Optional[float] = None
+
+
+class DecisionSignalProfileCalibrationBreakdowns(BaseModel):
+    decision_profile: List[DecisionSignalProfileCalibrationBucket] = Field(default_factory=list)
+    decision_profile_action: List[DecisionSignalProfileCalibrationBucket] = Field(default_factory=list)
+    decision_profile_horizon: List[DecisionSignalProfileCalibrationBucket] = Field(default_factory=list)
+    decision_profile_market_phase: List[DecisionSignalProfileCalibrationBucket] = Field(default_factory=list)
+    decision_profile_data_quality_level: List[DecisionSignalProfileCalibrationBucket] = Field(default_factory=list)
+    profile_source: List[DecisionSignalProfileCalibrationBucket] = Field(default_factory=list)
+
+
+class DecisionSignalProfileCalibration(BaseModel):
+    minimum_completed_sample_size: int = Field(..., ge=1)
+    breakdowns: DecisionSignalProfileCalibrationBreakdowns
+
+
 class DecisionSignalOutcomeStatsResponse(BaseModel):
     engine_version: str
     horizons: Optional[List[str]] = None
@@ -200,6 +230,7 @@ class DecisionSignalOutcomeStatsResponse(BaseModel):
     avg_stock_return_pct: Optional[float] = None
     unable_reasons: Dict[str, int] = Field(default_factory=dict)
     breakdowns: Dict[str, List[DecisionSignalOutcomeStatsBucket]] = Field(default_factory=dict)
+    profile_calibration: DecisionSignalProfileCalibration
 
 
 class DecisionSignalFeedbackRequest(BaseModel):
@@ -261,11 +292,23 @@ class DecisionSignalMutationResponse(BaseModel):
 
 
 class DecisionSignalReassessResponse(BaseModel):
-    preview: DecisionSignalPreview
+    preview: Optional[DecisionSignalPreview] = None
     item: Optional[DecisionSignalItem] = None
     created: bool = False
+    persist_status: Optional[Literal["created", "existing", "refreshed"]] = None
     warnings: List[DecisionSignalWarning] = Field(default_factory=list)
     blocked_reason: Optional[str] = None
+
+
+class DecisionSignalReassessErrorResponse(BaseModel):
+    error: Literal[
+        "unsupported_report_type",
+        "unsupported_report_snapshot",
+        "guardrail_blocked",
+    ]
+    message: str
+    blocked_reason: Optional[str] = None
+    warnings: List[DecisionSignalWarning] = Field(default_factory=list)
 
 
 class DecisionSignalListResponse(BaseModel):

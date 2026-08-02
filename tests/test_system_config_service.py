@@ -18,7 +18,7 @@ from tests.litellm_stub import ensure_litellm_stub
 
 ensure_litellm_stub()
 
-from src.config import ANSPIRE_LLM_MODEL_DEFAULT, DEFAULT_ALPHASIFT_INSTALL_SPEC, Config
+from src.config import ANSPIRE_LLM_MODEL_DEFAULT, Config
 from src.core.config_manager import ConfigManager
 from src.llm.backend_registry import GENERATION_ONLY_BACKEND_IDS
 from src.services.system_config_service import ConfigConflictError, ConfigImportError, ConfigValidationError, SystemConfigService
@@ -71,18 +71,98 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertFalse(items["GEMINI_API_KEY"]["is_masked"])
         self.assertTrue(items["GEMINI_API_KEY"]["raw_value_exists"])
 
-    def test_get_config_masks_alphasift_install_spec(self) -> None:
+    def _assert_agent_backend_status_matches_runtime(
+        self,
+        *,
+        saved_backend: str,
+        runtime_backend: str,
+    ) -> None:
+        from src.agent.agent_backend import resolve_agent_backend_id
+        from src.services.agent_backend_status_service import AgentBackendStatusService
+
         self._rewrite_env(
-            "STOCK_LIST=600519,000001",
-            "ALPHASIFT_INSTALL_SPEC=git+https://user:token@example.com/internal/alphasift.git",
+            "GEMINI_API_KEY=secret-key-value",
+            f"AGENT_BACKEND={saved_backend}",
+            "AGENT_ARCH=single",
+        )
+        codex_status = {
+            "backend": "codex_app_server",
+            "available": True,
+            "experimental": True,
+            "version": "codex-cli test",
+            "error_code": None,
+            "message": None,
+        }
+        with (
+            patch.dict(os.environ, {"AGENT_BACKEND": runtime_backend}),
+            patch.object(
+                AgentBackendStatusService,
+                "_codex_cheap_status",
+                return_value=codex_status,
+            ),
+        ):
+            Config.reset_instance()
+            runtime_config = Config.get_instance()
+            with patch.dict(os.environ, {"AGENT_BACKEND": saved_backend}):
+                settings_status = self.service.get_agent_backend_status()
+                chat_status = AgentBackendStatusService(config=runtime_config).get_status()
+                selected_backend = resolve_agent_backend_id(runtime_config)
+                preview_baseline = self.service.preview_agent_backend_status(items=[])
+                preview_draft = self.service.preview_agent_backend_status(
+                    items=[{"key": "AGENT_BACKEND", "value": saved_backend}],
+                )
+
+        self.assertEqual(settings_status["backend"], runtime_backend)
+        self.assertEqual(chat_status["backend"], runtime_backend)
+        self.assertEqual(selected_backend, runtime_backend)
+        self.assertEqual(preview_baseline["backend"], runtime_backend)
+        self.assertEqual(preview_draft["backend"], saved_backend)
+        self.assertIs(Config.get_instance(), runtime_config)
+
+    def test_agent_backend_status_prefers_runtime_litellm_over_saved_codex(self) -> None:
+        self._assert_agent_backend_status_matches_runtime(
+            saved_backend="codex_app_server",
+            runtime_backend="litellm",
         )
 
-        payload = self.service.get_config(include_schema=True)
-        items = {item["key"]: item for item in payload["items"]}
+    def test_agent_backend_status_prefers_runtime_codex_over_saved_litellm(self) -> None:
+        self._assert_agent_backend_status_matches_runtime(
+            saved_backend="litellm",
+            runtime_backend="codex_app_server",
+        )
 
-        self.assertEqual(items["ALPHASIFT_INSTALL_SPEC"]["value"], payload["mask_token"])
-        self.assertTrue(items["ALPHASIFT_INSTALL_SPEC"]["is_masked"])
-        self.assertTrue(items["ALPHASIFT_INSTALL_SPEC"]["schema"]["is_sensitive"])
+    def test_agent_backend_empty_preview_uses_runtime_generation_route(self) -> None:
+        from src.services.agent_backend_status_service import AgentBackendStatusService
+
+        self._rewrite_env(
+            "AGENT_BACKEND=litellm",
+            "LITELLM_MODEL=",
+            "OPENAI_API_KEY=",
+        )
+        runtime_env = {
+            "ENV_FILE": str(self.env_path),
+            "AGENT_BACKEND": "litellm",
+            "LITELLM_MODEL": "openai/gpt-4o",
+            "OPENAI_API_KEY": "runtime-key",
+        }
+        with patch.dict(os.environ, runtime_env, clear=True):
+            Config.reset_instance()
+            runtime_config = Config.get_instance()
+            settings_status = self.service.get_agent_backend_status()
+            chat_status = AgentBackendStatusService(config=runtime_config).get_status()
+            preview_baseline = self.service.preview_agent_backend_status(items=[])
+            preview_draft = self.service.preview_agent_backend_status(
+                items=[
+                    {"key": "LITELLM_MODEL", "value": ""},
+                    {"key": "OPENAI_API_KEY", "value": ""},
+                ],
+            )
+
+        self.assertEqual(settings_status, chat_status)
+        self.assertEqual(preview_baseline, chat_status)
+        self.assertTrue(chat_status["available"])
+        self.assertFalse(preview_draft["available"])
+        self.assertEqual(preview_draft["message"], "no_agent_primary")
 
     def test_get_config_masks_hermes_secret_fields(self) -> None:
         self._rewrite_env(
@@ -1696,7 +1776,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(current_map["STOCK_LIST"], "600519,300750")
         self.assertEqual(current_map["GEMINI_API_KEY"], "secret-key-value")
 
-    def test_update_alphasift_enable_does_not_rewrite_llm_fields(self) -> None:
+    def test_update_builtin_screening_enable_does_not_rewrite_llm_fields(self) -> None:
         self._rewrite_env(
             "STOCK_LIST=600519,000001",
             "LITELLM_MODEL=openai/gpt-4o-mini",
@@ -1708,8 +1788,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             "LLM_OPENAI_API_KEYS=legacy-openai-secret",
             "LLM_OPENAI_MODELS=openai/gpt-4o-mini,openai/gpt-4o",
             "LITELLM_FALLBACK_MODELS=openai/gpt-4o-mini,openai/gpt-4o",
-            "ALPHASIFT_ENABLED=false",
-            f"ALPHASIFT_INSTALL_SPEC={DEFAULT_ALPHASIFT_INSTALL_SPEC}",
+            "SCREENING_ENABLED=false",
             "LLM_USAGE_HMAC_SECRET=telemetry-secret",
             "LLM_USAGE_HMAC_KEY_VERSION=test-v1",
             "GEMINI_API_KEY=legacy-secret",
@@ -1718,8 +1797,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         response = self.service.update(
             config_version=self.manager.get_config_version(),
             items=[
-                {"key": "ALPHASIFT_ENABLED", "value": "true"},
-                {"key": "ALPHASIFT_INSTALL_SPEC", "value": "******"},
+                {"key": "SCREENING_ENABLED", "value": "true"},
                 {"key": "LLM_USAGE_HMAC_SECRET", "value": "******"},
                 {"key": "GEMINI_API_KEY", "value": "******"},
             ],
@@ -1729,15 +1807,11 @@ class SystemConfigServiceTestCase(unittest.TestCase):
 
         self.assertTrue(response["success"])
         self.assertEqual(response["applied_count"], 1)
-        self.assertIn("ALPHASIFT_ENABLED", response["updated_keys"])
-        self.assertEqual(response["skipped_masked_count"], 3)
+        self.assertIn("SCREENING_ENABLED", response["updated_keys"])
+        self.assertEqual(response["skipped_masked_count"], 2)
 
         current_map = self.manager.read_config_map()
-        self.assertEqual(current_map["ALPHASIFT_ENABLED"], "true")
-        self.assertEqual(
-            current_map["ALPHASIFT_INSTALL_SPEC"],
-            DEFAULT_ALPHASIFT_INSTALL_SPEC,
-        )
+        self.assertEqual(current_map["SCREENING_ENABLED"], "true")
         self.assertEqual(current_map["LLM_USAGE_HMAC_SECRET"], "telemetry-secret")
         self.assertEqual(current_map["LLM_USAGE_HMAC_KEY_VERSION"], "test-v1")
         self.assertEqual(current_map["GEMINI_API_KEY"], "legacy-secret")
@@ -2295,6 +2369,43 @@ class SystemConfigServiceTestCase(unittest.TestCase):
 
         self.assertFalse(validation["valid"])
         self.assertTrue(any(issue["code"] == "invalid_enum" for issue in validation["issues"]))
+
+    def test_validate_rejects_codex_backend_with_multi_agent_architecture(self) -> None:
+        validation = self.service.validate(
+            items=[
+                {"key": "AGENT_BACKEND", "value": "codex_app_server"},
+                {"key": "AGENT_ARCH", "value": "multi"},
+            ]
+        )
+
+        self.assertFalse(validation["valid"])
+        issue = next(
+            issue
+            for issue in validation["issues"]
+            if issue["code"] == "unsupported_agent_arch"
+        )
+        self.assertEqual(issue["key"], "AGENT_ARCH")
+        self.assertEqual(issue["expected"], "single")
+
+    def test_validate_rejects_disabled_timeout_for_codex_only(self) -> None:
+        codex = self.service.validate(
+            items=[
+                {"key": "AGENT_BACKEND", "value": "codex_app_server"},
+                {"key": "AGENT_ORCHESTRATOR_TIMEOUT_S", "value": "0"},
+            ]
+        )
+        litellm = self.service.validate(
+            items=[
+                {"key": "AGENT_BACKEND", "value": "litellm"},
+                {"key": "AGENT_ORCHESTRATOR_TIMEOUT_S", "value": "0"},
+            ]
+        )
+
+        self.assertFalse(codex["valid"])
+        self.assertTrue(
+            any(issue["code"] == "codex_timeout_required" for issue in codex["issues"])
+        )
+        self.assertTrue(litellm["valid"])
 
     def test_validate_reports_generation_backend_numeric_maximum(self) -> None:
         validation = self.service.validate(
@@ -3429,6 +3540,56 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(mock_completion.call_count, 3)
         self.assertEqual(mock_completion.call_args_list[1].kwargs["response_format"], {"type": "json_object"})
         self.assertEqual(mock_completion.call_args_list[2].kwargs["tool_choice"]["function"]["name"], "dsa_probe_echo")
+
+    @patch("litellm.completion")
+    def test_test_llm_channel_json_capability_ignores_minimax_reasoning_blocks(self, mock_completion) -> None:
+        mock_completion.side_effect = [
+            self._mock_completion_response("OK"),
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "content_blocks": [
+                                {"type": "reasoning", "content": "Internal reasoning"},
+                                {"type": "text", "text": '{"status":"ok"}'},
+                            ],
+                        }
+                    }
+                ]
+            },
+        ]
+
+        payload = self.service.test_llm_channel(
+            name="minimax",
+            protocol="openai",
+            base_url="https://api.minimax.io/v1",
+            api_key="sk-test-value",
+            models=["MiniMax-M3"],
+            capability_checks=["json"],
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["capability_results"]["json"]["status"], "passed")
+
+    @patch("litellm.completion")
+    def test_test_llm_channel_json_capability_strips_minimax_think_wrapper(self, mock_completion) -> None:
+        mock_completion.side_effect = [
+            self._mock_completion_response("OK"),
+            self._mock_completion_response('<think>Internal reasoning</think>{"status":"ok"}'),
+        ]
+
+        payload = self.service.test_llm_channel(
+            name="minimax",
+            protocol="openai",
+            base_url="https://api.minimax.io/v1",
+            api_key="sk-test-value",
+            models=["MiniMax-M3"],
+            capability_checks=["json"],
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["capability_results"]["json"]["status"], "passed")
 
     @patch("litellm.completion")
     def test_test_llm_channel_reports_json_capability_failures(self, mock_completion) -> None:

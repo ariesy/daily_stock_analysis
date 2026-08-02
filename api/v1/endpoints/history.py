@@ -10,9 +10,10 @@
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
+from fastapi.responses import Response
 
 from api.deps import get_database_manager
 from api.v1.schemas.history import (
@@ -48,6 +49,7 @@ from src.utils.data_processing import (
     normalize_model_used,
     extract_fundamental_detail_fields,
     extract_board_detail_fields,
+    extract_market_structure_detail_field,
     extract_realtime_detail_fields,
 )
 from src.analysis_context_pack_overview import (
@@ -55,10 +57,27 @@ from src.analysis_context_pack_overview import (
     sanitize_context_snapshot_for_api,
 )
 from src.market_phase_summary import extract_market_phase_summary
+from src.config import get_config
+from src.md2img import markdown_to_image
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_DELETE_BY_CODE_BATCH_SIZE = 10_000
+
+
+def _history_share_image_payload(result: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    """Return the exact persisted payload used by the deterministic poster."""
+
+    if result.get("report_type") == "market_review":
+        context_snapshot = result.get("context_snapshot")
+        if isinstance(context_snapshot, Mapping):
+            market_payload = context_snapshot.get("market_review_payload")
+            if isinstance(market_payload, Mapping):
+                return market_payload
+
+    raw_result = result.get("raw_result")
+    return raw_result if isinstance(raw_result, Mapping) else None
 
 
 def _normalize_code_for_grouping(code: str) -> str:
@@ -192,6 +211,7 @@ def get_history_list(
                 stock_code=item.get("stock_code", ""),
                 stock_name=item.get("stock_name"),
                 report_type=item.get("report_type"),
+                region=item.get("region"),
                 trend_prediction=item.get("trend_prediction"),
                 analysis_summary=item.get("analysis_summary"),
                 sentiment_score=item.get("sentiment_score"),
@@ -232,6 +252,7 @@ def get_history_list(
     response_model=DeleteHistoryResponse,
     responses={
         200: {"description": "删除成功"},
+        400: {"description": "股票代码不能为空", "model": ErrorResponse},
         404: {"description": "未找到记录", "model": ErrorResponse},
         500: {"description": "服务器错误", "model": ErrorResponse},
     },
@@ -244,12 +265,33 @@ def delete_history_by_code(
 ) -> DeleteHistoryResponse:
     try:
         candidates = HistoryService._history_code_filter_candidates(stock_code)
-        records, _ = db_manager.get_analysis_history_paginated(code=candidates, limit=10000)
-        record_ids = [r.id for r in records if r.id is not None]
-        if not record_ids:
-            return DeleteHistoryResponse(deleted=0)
-        deleted = db_manager.delete_analysis_history_records(record_ids)
+        if not candidates:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_request", "message": "stock_code 不能为空"},
+            )
+
+        deleted = 0
+        while True:
+            records, _ = db_manager.get_analysis_history_paginated(
+                code=candidates,
+                limit=_DELETE_BY_CODE_BATCH_SIZE,
+            )
+            record_ids = [r.id for r in records if r.id is not None]
+            if not record_ids:
+                break
+
+            batch_deleted = db_manager.delete_analysis_history_records(record_ids)
+            if batch_deleted == 0:
+                raise RuntimeError("history deletion made no progress")
+            deleted += batch_deleted
+
+            if len(records) < _DELETE_BY_CODE_BATCH_SIZE:
+                break
+
         return DeleteHistoryResponse(deleted=deleted)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"按股票代码删除历史记录失败: {e}", exc_info=True)
         raise HTTPException(
@@ -539,6 +581,10 @@ def get_history_detail(
             context_snapshot=result.get("context_snapshot"),
             fallback_fundamental_payload=fallback_fundamental,
         )
+        market_structure = extract_market_structure_detail_field(
+            result.get("context_snapshot"),
+            result.get("raw_result"),
+        )
 
         details = ReportDetails(
             news_content=result.get("news_content"),
@@ -550,6 +596,7 @@ def get_history_detail(
             belong_boards=extracted_boards.get("belong_boards"),
             sector_rankings=extracted_boards.get("sector_rankings"),
             concept_rankings=extracted_boards.get("concept_rankings"),
+            market_structure=market_structure,
         )
         
         return AnalysisReport(
@@ -714,6 +761,82 @@ def get_history_news(
                 "message": f"查询新闻情报失败: {str(e)}"
             }
         )
+
+
+@router.get(
+    "/{record_id}/share-image",
+    response_class=Response,
+    responses={
+        200: {"description": "PNG 分享图片", "content": {"image/png": {}}},
+        404: {"description": "报告不存在", "model": ErrorResponse},
+        500: {"description": "报告生成失败", "model": ErrorResponse},
+        503: {"description": "图片渲染器不可用", "model": ErrorResponse},
+    },
+    summary="生成历史报告分享图片",
+    description="根据历史报告 Markdown 与持久化结构化数据生成确定性的 PNG 分享图片",
+)
+def get_history_share_image(
+    record_id: str,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> Response:
+    service = HistoryService(db_manager)
+    result = service.resolve_and_get_detail(record_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "not_found",
+                "message": f"未找到 id/query_id={record_id} 的分析记录",
+            },
+        )
+
+    try:
+        markdown_content = service.get_markdown_report(record_id)
+    except MarkdownReportGenerationError as exc:
+        logger.error("Share image report generation failed for %s: %s", record_id, exc.message)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "generation_failed",
+                "message": f"生成分享图片所需报告失败: {exc.message}",
+            },
+        ) from exc
+
+    if not markdown_content:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "not_found",
+                "message": f"未找到 id/query_id={record_id} 的报告内容",
+            },
+        )
+
+    config = get_config()
+    image_bytes = markdown_to_image(
+        markdown_content,
+        max_chars=getattr(config, "markdown_to_image_max_chars", 15000),
+        structured_payload=_history_share_image_payload(result),
+    )
+    if image_bytes is None:
+        engine = getattr(config, "md2img_engine", "wkhtmltoimage")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "share_image_unavailable",
+                "message": f"分享图片生成失败，请检查 {engine} 转图工具是否已安装并可用",
+            },
+        )
+
+    filename = f"dsa-report-{result.get('id') or record_id}.png"
+    return Response(
+        content=image_bytes,
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get(

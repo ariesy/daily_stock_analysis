@@ -13,6 +13,7 @@ import { StockAutocomplete } from '../components/StockAutocomplete';
 import { StockHistoryTrendDrawer } from '../components/history';
 import { ReportMarkdownDrawer } from '../components/report/ReportMarkdownDrawer';
 import { MarketReviewReportView } from '../components/report/MarketReviewReportView';
+import { MarketReviewRegionSelector } from '../components/market-review/MarketReviewRegionSelector';
 import { ReportSummary } from '../components/report/ReportSummary';
 import { RunFlowPanel } from '../components/run-flow';
 import { TaskPanel } from '../components/tasks';
@@ -31,6 +32,7 @@ import type {
   AnalyzeAsyncResponse,
   HistoryItem,
   MarketReviewPayload,
+  MarketReviewRegion,
   StockBarItem,
   TaskInfo,
 } from '../types/analysis';
@@ -53,6 +55,7 @@ type StockAnalysisNavigationState = {
   stockName?: string;
   autoAnalyze?: boolean;
   selectionSource?: string;
+  skills?: string[];
 };
 
 const DUPLICATE_BANNER_AUTO_DISMISS_MS = 5000;
@@ -185,6 +188,7 @@ const HomePage: React.FC = () => {
   const [marketReviewError, setMarketReviewError] = useState<ParsedApiError | null>(null);
   const [marketReviewReport, setMarketReviewReport] = useState<string | null>(null);
   const [marketReviewPayload, setMarketReviewPayload] = useState<MarketReviewPayload | null>(null);
+  const [marketReviewRegionOverride, setMarketReviewRegionOverride] = useState<MarketReviewRegion[] | undefined>();
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
   const [strategyMenuOpen, setStrategyMenuOpen] = useState(false);
@@ -696,13 +700,14 @@ const HomePage: React.FC = () => {
       stockCode?: string,
       stockName?: string,
       selectionSource?: 'manual' | 'autocomplete' | 'import' | 'image',
+      analysisSkills?: string[],
     ) => {
       void submitAnalysis({
         stockCode,
         stockName,
         originalQuery: query,
         selectionSource: selectionSource ?? 'manual',
-        skills: selectedAnalysisSkills,
+        skills: analysisSkills ?? selectedAnalysisSkills,
       });
     },
     [query, selectedAnalysisSkills, submitAnalysis],
@@ -718,7 +723,7 @@ const HomePage: React.FC = () => {
     setQuery(stockCode);
     navigate(location.pathname, { replace: true, state: null });
     if (state?.autoAnalyze) {
-      handleSubmitAnalysis(stockCode, stockName || undefined, 'import');
+      handleSubmitAnalysis(stockCode, stockName || undefined, 'import', state.skills);
     }
   }, [handleSubmitAnalysis, location.pathname, location.state, navigate, setQuery]);
 
@@ -806,7 +811,9 @@ const HomePage: React.FC = () => {
             setMarketReviewNotice({
               variant: 'warning',
               title: t('home.marketReviewInProgress'),
-              message: t('home.taskStatus', { status: status.status, progress }),
+              message: status.region
+                ? t('home.taskStatusWithRegion', { status: status.status, progress, region: status.region })
+                : t('home.taskStatus', { status: status.status, progress }),
             });
             return true;
           }
@@ -897,11 +904,17 @@ const HomePage: React.FC = () => {
     setMarketReviewPayload(null);
     scrollMarketReviewFeedbackIntoView();
     try {
-      const result = await analysisApi.triggerMarketReview({ sendNotification: notify });
+      const result = await analysisApi.triggerMarketReview({
+        sendNotification: notify,
+        regions: marketReviewRegionOverride,
+      });
       setMarketReviewNotice({
         variant: 'success',
         title: t('home.marketReviewSubmitted'),
-        message: result.message,
+        message: t('home.marketReviewSubmittedWithRegion', {
+          message: result.message,
+          region: result.region,
+        }),
       });
       scrollMarketReviewFeedbackIntoView();
 
@@ -915,7 +928,7 @@ const HomePage: React.FC = () => {
     } finally {
       setIsSubmittingMarketReview(false);
     }
-  }, [notify, pollMarketReviewStatus, scrollMarketReviewFeedbackIntoView, t]);
+  }, [marketReviewRegionOverride, notify, pollMarketReviewStatus, scrollMarketReviewFeedbackIntoView, t]);
 
   const todayDateKey = getTodayInShanghai();
   useEffect(() => {
@@ -1347,11 +1360,17 @@ const HomePage: React.FC = () => {
                 </div>
               ) : null}
             </div>
-            <div className="flex min-w-0 flex-shrink-0 items-center gap-2.5">
-              <label className="flex h-10 flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-xl border border-subtle bg-surface/60 px-3 text-xs text-secondary-text select-none transition-colors hover:border-subtle-hover hover:text-foreground">
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+              <MarketReviewRegionSelector
+                value={marketReviewRegionOverride}
+                disabled={isSubmittingMarketReview}
+                onChange={setMarketReviewRegionOverride}
+              />
+              <label className="flex h-10 flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-xl border border-subtle bg-surface/60 px-3 text-xs text-secondary-text select-none transition-colors hover:border-subtle-hover hover:text-foreground has-disabled:cursor-not-allowed has-disabled:opacity-50">
                 <input
                   type="checkbox"
                   checked={notify}
+                  disabled={isSubmittingMarketReview}
                   onChange={(e) => setNotify(e.target.checked)}
                   className="h-3.5 w-3.5 rounded border-border accent-primary"
                 />
