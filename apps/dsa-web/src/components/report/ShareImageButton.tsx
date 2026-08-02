@@ -10,7 +10,7 @@ type DesktopWindow = Window & {
   dsaDesktop?: unknown;
 };
 
-type ShareState = 'idle' | 'loading' | 'success' | 'error';
+type ShareState = 'idle' | 'loading' | 'ready' | 'success' | 'error';
 
 interface ShareImageButtonProps {
   recordId?: number;
@@ -47,12 +47,12 @@ export const ShareImageButton: React.FC<ShareImageButtonProps> = ({
     state: ShareState;
   }>(() => ({
     recordId: activeRecordId,
-    state: activeRecordId === undefined ? 'idle' : 'loading',
+    state: 'idle',
   }));
   const resetTimerRef = useRef<number | null>(null);
   const loadTokenRef = useRef(0);
   const cachedImageRef = useRef<{ recordId: number; blob: Blob } | null>(null);
-  const state = stateSnapshot.recordId === activeRecordId ? stateSnapshot.state : 'loading';
+  const state = stateSnapshot.recordId === activeRecordId ? stateSnapshot.state : 'idle';
   const setState = useCallback((nextState: ShareState) => {
     setStateSnapshot({ recordId: activeRecordId, state: nextState });
   }, [activeRecordId]);
@@ -62,11 +62,6 @@ export const ShareImageButton: React.FC<ShareImageButtonProps> = ({
       resetTimerRef.current = null;
     }
   }, []);
-
-  useEffect(() => () => {
-    loadTokenRef.current += 1;
-    clearResetTimer();
-  }, [clearResetTimer]);
 
   const scheduleReset = useCallback(() => {
     clearResetTimer();
@@ -80,76 +75,68 @@ export const ShareImageButton: React.FC<ShareImageButtonProps> = ({
     }, 2200);
   }, [activeRecordId, clearResetTimer]);
 
-  const prepareShareImage = useCallback(() => {
-    if (activeRecordId === undefined) return;
-
-    const loadToken = loadTokenRef.current + 1;
-    loadTokenRef.current = loadToken;
-    cachedImageRef.current = null;
-    setState('loading');
-
-    void historyApi.getShareImage(activeRecordId).then((blob) => {
-      if (loadTokenRef.current !== loadToken) return;
-      cachedImageRef.current = { recordId: activeRecordId, blob };
-      setState('idle');
-    }).catch((error: unknown) => {
-      if (loadTokenRef.current !== loadToken) return;
-      console.error('Generate share image failed:', error);
-      setState('error');
-    });
-  }, [activeRecordId, setState]);
-
   useEffect(() => {
     clearResetTimer();
-    if (activeRecordId === undefined) return undefined;
-
-    const loadToken = loadTokenRef.current + 1;
-    loadTokenRef.current = loadToken;
+    loadTokenRef.current += 1;
     cachedImageRef.current = null;
-    void historyApi.getShareImage(activeRecordId).then((blob) => {
-      if (loadTokenRef.current !== loadToken) return;
-      cachedImageRef.current = { recordId: activeRecordId, blob };
-      setState('idle');
-    }).catch((error: unknown) => {
-      if (loadTokenRef.current !== loadToken) return;
-      console.error('Generate share image failed:', error);
-      setState('error');
-    });
 
     return () => {
       clearResetTimer();
       loadTokenRef.current += 1;
     };
-  }, [activeRecordId, clearResetTimer, setState]);
+  }, [activeRecordId, clearResetTimer]);
 
   const handleShare = useCallback(async () => {
     if (activeRecordId === undefined || state === 'loading') return;
-    const cachedImage = cachedImageRef.current;
-    if (!cachedImage || cachedImage.recordId !== activeRecordId) {
-      prepareShareImage();
-      return;
+    clearResetTimer();
+
+    let blob = cachedImageRef.current?.recordId === activeRecordId
+      ? cachedImageRef.current.blob
+      : null;
+    let generatedNow = false;
+
+    if (!blob) {
+      const loadToken = loadTokenRef.current + 1;
+      loadTokenRef.current = loadToken;
+      setState('loading');
+      try {
+        blob = await historyApi.getShareImage(activeRecordId);
+      } catch (error) {
+        if (loadTokenRef.current !== loadToken) return;
+        console.error('Generate share image failed:', error);
+        setState('error');
+        return;
+      }
+      if (loadTokenRef.current !== loadToken) return;
+      cachedImageRef.current = { recordId: activeRecordId, blob };
+      generatedNow = true;
     }
 
-    const blob = cachedImage.blob;
     const filename = `${safeFilenamePart(reportTitle)}-${activeRecordId}.png`;
     const file = new File([blob], filename, { type: 'image/png' });
     const canShareFile = typeof navigator.share === 'function'
       && typeof navigator.canShare === 'function'
       && navigator.canShare({ files: [file] });
 
+    // A file cannot be shared before it exists, while navigator.share() must run
+    // inside a transient user-activation event. Prepare on the first click and
+    // let the next click invoke native sharing synchronously.
+    if (generatedNow && canShareFile) {
+      setState('ready');
+      return;
+    }
+
     setState('loading');
     try {
       if (canShareFile) {
         try {
-          // The image is preloaded before the click, so navigator.share() is
-          // invoked while this user-activation event is still active.
           await navigator.share({
             files: [file],
             title: reportTitle,
           });
         } catch (error) {
           if (error instanceof DOMException && error.name === 'AbortError') {
-            setState('idle');
+            setState('ready');
             return;
           }
           console.warn('Native file sharing failed; falling back to download:', error);
@@ -165,12 +152,14 @@ export const ShareImageButton: React.FC<ShareImageButtonProps> = ({
       console.error('Generate share image failed:', error);
       setState('error');
     }
-  }, [activeRecordId, prepareShareImage, reportTitle, scheduleReset, setState, state]);
+  }, [activeRecordId, clearResetTimer, reportTitle, scheduleReset, setState, state]);
 
   if (activeRecordId === undefined) return null;
 
   const tooltipText = state === 'loading'
     ? text.generatingShareImage
+    : state === 'ready'
+      ? text.shareImageReadyToShare
     : state === 'success'
       ? text.shareImageReady
       : state === 'error'
@@ -190,7 +179,7 @@ export const ShareImageButton: React.FC<ShareImageButtonProps> = ({
           {state === 'loading' ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : null}
           {state === 'success' ? <Check className="h-5 w-5 text-success" aria-hidden="true" /> : null}
           {state === 'error' ? <TriangleAlert className="h-5 w-5 text-danger" aria-hidden="true" /> : null}
-          {state === 'idle' ? <Share2 className="h-5 w-5" aria-hidden="true" /> : null}
+          {state === 'idle' || state === 'ready' ? <Share2 className="h-5 w-5" aria-hidden="true" /> : null}
           <span>{tooltipText}</span>
         </button>
       </span>

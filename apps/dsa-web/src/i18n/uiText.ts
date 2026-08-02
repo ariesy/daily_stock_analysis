@@ -637,7 +637,7 @@ const zh = {
   'settings.activePanelTitle': '当前分类配置项',
   'settings.agentSettings': 'Agent 设置',
   'settings.screening': '选股',
-  'settings.screeningDescription': '启用实验性质的选股功能，实现参考 AlphaSift。',
+  'settings.screeningDescription': '控制 Web 选股入口及内置选股功能。',
   'settings.screeningDisabled': '选股未开启',
   'settings.screeningEnabled': '选股已开启',
   'settings.screeningRisk': '实验功能与风险提示：选股结果仅用于研究和辅助判断，不构成投资建议；市场有风险，交易决策和损益由使用者自行承担。',
@@ -930,7 +930,6 @@ const zh = {
   'settings.versionInfo': '版本信息',
   'settings.versionInfoDescription': '用于确认当前 WebUI 静态资源是否已经切换到最新构建。',
   'settings.versionWebui': 'WebUI 版本',
-  'settings.viewConfigItems': '查看配置项',
   'settings.envExportNote': '导出内容仅包含当前已保存配置，不包含页面上尚未保存的本地草稿。',
   'settings.envDockerNote': 'Docker 部署中，`--env-file` / Compose `env_file` 只会在启动时注入环境变量；此处导出/导入的是后端当前活跃的 `.env` 文件。若需要让 WebUI 保存值随容器重建保留，请将 `ENV_FILE` 指向 `/app/data/runtime.env` 等可写数据卷文件，并避免启动环境里继续保留同名旧值。',
 } as const;
@@ -1574,7 +1573,7 @@ const en: Record<UiTextKey, string> = {
   'settings.activePanelTitle': 'Current category fields',
   'settings.agentSettings': 'Agent settings',
   'settings.screening': 'Screening',
-  'settings.screeningDescription': 'Enable experimental screening, implemented with reference to AlphaSift.',
+  'settings.screeningDescription': 'Control the Web navigation entry and built-in stock screening feature.',
   'settings.screeningDisabled': 'Screening disabled',
   'settings.screeningEnabled': 'Screening enabled',
   'settings.screeningRisk': 'Experimental risk notice: screening results are for research and decision support only and are not investment advice. Markets involve risk; trading decisions and results are your responsibility.',
@@ -1867,7 +1866,6 @@ const en: Record<UiTextKey, string> = {
   'settings.versionInfo': 'Version info',
   'settings.versionInfoDescription': 'Use this to confirm the current WebUI static assets are on the latest build.',
   'settings.versionWebui': 'WebUI version',
-  'settings.viewConfigItems': 'View fields',
   'settings.envExportNote': 'Exports include only currently saved configuration, not unsaved local drafts on the page.',
   'settings.envDockerNote': 'In Docker deployments, --env-file and Compose env_file inject environment variables only at startup. This export/import area uses the backend active .env file. To keep WebUI-saved values across container rebuilds, point ENV_FILE to a writable data-volume file such as /app/data/runtime.env and avoid keeping same-name old values in the startup environment.',
 };

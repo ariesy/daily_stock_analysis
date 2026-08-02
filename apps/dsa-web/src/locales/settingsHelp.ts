@@ -324,7 +324,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响 Web 自动补全和后端股票名称解析使用的股票简称新鲜度。'],
     notes: ['远程下载失败时会继续使用已有缓存或随应用打包的内置索引。'],
   },
-  'settings.data_source.SCREENING_ENABLED': {
+  'settings.base.SCREENING_ENABLED': {
     title: '选股',
     summary: '控制是否启用选股页；实现参考 AlphaSift。',
     usage: '默认关闭。设为 true 后显示选股入口并启用选股策略。',
@@ -1522,7 +1522,7 @@ const settingsHelpEnUS: SettingsHelpMap = {
     impact: ['Affects stock-name freshness for Web autocomplete and backend stock-name resolution.'],
     notes: ['When remote download fails, the app keeps using an existing cache or the bundled index.'],
   },
-  'settings.data_source.SCREENING_ENABLED': {
+  'settings.base.SCREENING_ENABLED': {
     title: 'Screening',
     summary: 'Controls the Screening page, implemented with reference to AlphaSift.',
     usage: 'Disabled by default. Set it to true to show Screening and enable screening strategies.',
