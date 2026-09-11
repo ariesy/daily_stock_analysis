@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [新功能] 飞书推送新增文件上传能力：`FeishuSender.send_feishu_file(file_path)` 通过 App Bot SDK (`im.v1.file.create`) 上传文件并发送文件消息；Webhook 模式回退为发送文件内容文本；新增 `FEISHU_SEND_AS_FILE=true` 配置开关，开启后飞书以文件形式发送报告而非文字消息。
+- [新功能] 多 Agent 编排 Pipeline 新增子 Agent 独立超时钳位：支持 6 个环境变量为 TechnicalAgent、IntelAgent、RiskAgent、DecisionAgent、PortfolioAgent、SkillAgent 各自配置独立硬上限，互不挤占配额；默认 0 表示关闭钳位。
+- [新功能] 新增 `TdxChronosFetcher`，把外部 [tdx-chronos](https://github.com/ariesy/tdx-chronos) Parquet 数据仓库作为 A 股 stock + ETF 日线的第一优先级离线来源；通过 `TDX_CHRONOS_DATA_DIR` 配置数据目录（默认自动探测 `/app/tdx-chronos/data` → `./tdx-chronos/data`），导入或目录不可用时自动降级。可转债 / REITs 非 ETF 段 / 指数 / HK-US-JP-KR-TW 不在本 fetcher 范围内，由原优先级链继续提供。
+- [修复] 本地 CLI 的 `stdout_preview` / `stderr_preview` 按环境变量、JSON、YAML/日志标量与 URL 的独立契约脱敏短凭证，避免小于 32 字符的 API key、secret 或 token 进入诊断；普通字段仅按敏感名称判定，未加引号的 YAML 敏感标量则 fail-closed 脱敏至行尾（refs #1784）。
+- [改进] 图片报告改用独立的 1080px 个股决策卡和高密度市场复盘卡，优先从 `AnalysisResult.to_dict()` / `market_review_payload` 精确填充数据并保留 Markdown 回退；个股图增加置信度、趋势分、乖离率和阶段观察窗口，市场图增加灯号拆解、强弱板块、资金观察、关注/回避方向和策略失效条件，小红书账号与二维码改为可关闭/替换的部署配置并直接展示 GitHub 仓库地址；Web 历史报告预生成图片后在用户点击时同步发起系统分享，并保留下载回退及 Playwright 渲染引擎。
+- [修复] PyInstaller 冻结包在 NLTK 3.10 导入保护下将内置 `_internal` 标准库误判为当前目录模块并启动失败；新增仅在冻结包中先于 NLTK 执行的兼容 runtime hook，并由 Windows/macOS 打包脚本统一接入。
+- [修复] 分享图按字段合并历史结构化数据与 Markdown，多市场逐区域复用持久化 payload，隐藏不可用市场灯号维度并保留 `MARKET_REVIEW_COLOR_SCHEME`；中英韩模板界面跟随报告语言，Web 原生分享失败时自动回退下载。
+- [修复] 飞书 `FEISHU_SEND_AS_FILE` 报告分支在写入或上传 `.md` 文件前统一清理隐藏的 `[dsa-market-region]` metadata，避免单市场复盘把内部 region 标记暴露给最终用户；桌面运行时默认隐藏 Web 分享按钮，避免未随包提供 renderer 的 Windows/macOS 打包版在页面加载时预取分享图后直接进入失败态。
+- [修复] `redact_diagnostic_text()` 在 `export SENSITIVE_ENV=$(printenv OTHER_SECRET) session_id=...` 形态下不再因第二遍 `$(...)` 扫描与第一遍敏感赋值替换区重叠而吞掉 `session_id` 等尾随非敏感诊断字段；第二遍扫描现以 first-pass 已替换 span 列表为可信跳过表，并对 prior-head / prior-semicolon 分支的 leading regex 加上 `(?:export[ \t]+)?` 前缀，使 `export FOO=$(...)` 与 `FOO=$(...)` 在所有分支行为对齐（关闭 PR #2118 review blocker OR-COR-7c0a5d41）。
+- [修复] LongbridgeFetcher._compute_volume_ratio 调用 history_candlesticks_by_offset 时把 time 与 count 两个位置参数传反，PyO3 转换层抛 argument 'time': 'int' object cannot be converted to 'PyDateTime'，异常被 try/except 静默吞到 DEBUG 日志，导致港股/美股实时行情链路上的量比字段恒为 None 并对外表现为"未获取到数据"；改用 adaptive keyword args 调用，兼容 0.2.74 (forward, time, count) 与 4.x (forward, count, time) 两种 SDK 契约，并按 keyword args 契约覆盖两版本回归测试（fixes #2100）
+
+- [修复] 选股结果持久化恢复：选股页新增历史记录区块，任务完成后保留 run_id，刷新页面可从历史 API 恢复上次选股结果（此前刷新后结果丢失）。
 
 ## [3.32.0] - 2026-09-06
 
