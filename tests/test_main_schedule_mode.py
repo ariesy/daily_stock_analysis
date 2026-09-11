@@ -314,6 +314,9 @@ class MainScheduleModeTestCase(unittest.TestCase):
         config = self._make_config(log_level="INFO")
 
         class BusySocket:
+            def setsockopt(self, *args, **kwargs):
+                pass
+
             def bind(self, address):
                 raise OSError("address already in use")
 
@@ -350,6 +353,9 @@ class MainScheduleModeTestCase(unittest.TestCase):
             Server = _FakeUvicornServer
 
         class _UnusedSocket:
+            def setsockopt(self, *args, **kwargs):
+                pass
+
             def bind(self, address):
                 pass
 
@@ -391,6 +397,9 @@ class MainScheduleModeTestCase(unittest.TestCase):
                     raise TypeError("install_signal_handlers is unsupported")
 
         class _UnusedSocket:
+            def setsockopt(self, *args, **kwargs):
+                pass
+
             def bind(self, address):
                 pass
 
